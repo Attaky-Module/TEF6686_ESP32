@@ -140,6 +140,14 @@ void TEF6686::init(byte TEF) {
 
     xtalADC = analogRead(15);
 
+#ifdef ATK_COMBO_V1
+    // Board profile: there is no xtal-sense divider on GPIO15 (that is classic
+    // upstream hardware only), so analogRead(15) returns a floating value. The
+    // FM-AM module SSOT and FactoryTest both use a 9.216 MHz reference — select
+    // that table directly instead of guessing from a floating ADC reading.
+    (void)xtalADC;
+    Tuner_Init(tuner_init_tab9216);
+#else
     if (xtalADC < XTAL_0V_ADC + XTAL_ADC_TOL) {
       Tuner_Init(tuner_init_tab9216);
       log_d("TEF668X XTAL : 9.216M");
@@ -153,6 +161,7 @@ void TEF6686::init(byte TEF) {
       Tuner_Init(tuner_init_tab4000);
       log_d("TEF668X XTAL : 4M");
     }
+#endif
     power(1);
     Tuner_Init(tuner_init_tab);
   }

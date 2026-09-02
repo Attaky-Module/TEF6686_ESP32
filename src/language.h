@@ -5,7 +5,7 @@
 
 // [number of languages][number of texts]
 
-static const char* const myLanguage[21][301] PROGMEM = {
+static const char* const myLanguage[21][302] PROGMEM = {
   { "English", // English
     "Rotary direction changed", // 1
     "Please release button", // 2
@@ -306,7 +306,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST on NTP time", // 297
     "Set NTP time offset", // 298
     "The logbook contains over 130 entries, which the viewer cannot process. Please download the CSV file to process it.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Direct tuning" // 327
   },
 
   { "Nederlands", // Dutch
@@ -609,7 +610,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto zomertijd\nop NTP tijd", // 297
     "NTP tijdverschil\ninstellen", // 298
     "Het logboek bevat meer dan 130 items, die de viewer niet kan verwerken. Download alstublieft het CSV-bestand om het te bekijken.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Directe frequentieinvoer" // 327
   },
 
   { "Polski", // Polish
@@ -912,7 +914,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto czas letni wg NTP", // 297
     "Ustaw odchyl. czasu NTP", // 298
     "Wykaz zawiera ponad 130 wpisów, których przeglądarka nie może pokazać. Pobierz plik CSV, aby je przetworzyć.", // 299
-    "Kanada" // 300
+    "Kanada", // 300
+    "Bezpośrednie strojenie" // 327
   },
 
   { "Hrvatski", // Croatian
@@ -1215,7 +1218,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST na NTP vremenu", // 297
     "Postavi NTP pomak vremena", // 298
     "Dnevnik sadrži preko 130 unosa, koje preglednik ne može obraditi. Preuzmite CSV datoteku za obradu.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Izravno ugađanje" // 327
   },
 
   { "Ελληνικά", // Greek
@@ -1518,7 +1522,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Αυτόματο DST\nσε ώρα NTP", // 297
     "Ολίσθηση ώρας NTP", // 298
     "Το βιβλίο περιέχει πάνω από 130 καταγραφές, και είναι αδύνατη η επεξεργασία τους από το χρήστη. Κάντε λήψη του αρχείου CSV για να το επεξεργαστείτε.", // 299
-    "Καναδάς" // 300
+    "Καναδάς", // 300
+    "Άμεσος συντονισμός" // 327
   },
 
   { "Română", // Romanian
@@ -1821,7 +1826,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST pe ora NTP", // 297
     "Setează offsetul pentru ora NTP", // 298
     "Jurnalul conține peste 130 de intrări, pe care vizualizatorul nu le poate procesa. Te rog descarcă fișierul CSV pentru a le procesa.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Acordare directă" // 327
   },
 
   { "Deutsch", // German
@@ -2124,7 +2130,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto-Sommerzeit\nüber NTP", // 297
     "NTP-Zeitversatz\neinstellen", // 298
     "Das Logbuch enthält mehr als 130 Einträge, was das Anzeigeprogramm nicht verarbeiten kann. Bitte lade die CSV-Datei zum Verarbeiten herunter.", // 299
-    "Kanada" // 300
+    "Kanada", // 300
+    "Direkte Abstimmung" // 327
   },
 
   { "Čeština", // Czech
@@ -2427,7 +2434,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST u NTP času", // 297
     "Nastavte časový posun NTP", // 298
     "Logbook obsahuje více než 130 položek, které prohlížeč nedokáže zpracovat. Pro zpracování všech položek si stáhněte CSV soubor.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Přímé ladění" // 327
   },
 
   { "Magyar", // Hungarian
@@ -2730,7 +2738,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto nyári idő(DST)\nNTP idő szerint", // 297
     "NTP időeltolás beállítása", // 298
     "A napló több mint 130 bejegyzést tartalmaz, amelyeket a megtekintő nem tud feldolgozni. Kérlek, töltsd le a CSV fájlt a megtekintéshez.", // 299
-    "Kanada" // 300
+    "Kanada", // 300
+    "Közvetlen hangolás" // 327
   },
 
   { "Français", // French
@@ -3033,7 +3042,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "DST automatique\nsur l'heure NTP", // 297
     "Décalage horaire NTP", // 298
     "Le journal de bord contient plus de 130 entrées que la liste ne peut pas afficher. Veuillez télécharger le fichier CSV.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Accord direct" // 327
   },
 
   { "Български", // Bulgarian
@@ -3336,7 +3346,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Автоматично лятно\nвреме по NTP", // 297
     "Отместване на NTP", // 298
     "Дневникът съдържа над 130 записа, които не могат да бъдат обработени. Моля, изтеглете CSV файла за обработка.", // 299
-    "Канада" // 300
+    "Канада", // 300
+    "Директно настройване" // 327
   },
 
   { "Русский", // Russian
@@ -3639,7 +3650,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Автоматическое летнее время по NTP", // 297
     "Смещение времени NTP", // 298
     "В логе более 130 записей, которые программа просмотра не может обработать. Загрузите файл CSV для его обработки.", // 299
-    "Канада" // 300
+    "Канада", // 300
+    "Прямая настройка" // 327
   },
 
   { "Українська", // Ukranian
@@ -3942,7 +3954,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Автоматичний літній\nчас за часом NTP", // 297
     "Установити зміщення\nчасу NTP", // 298
     "Журнал містить понад 130 записів, які програма перегляду не може обробити. Будь ласка, завантажте файл CSV, щоб обробити його.", // 299
-    "Канада" // 300
+    "Канада", // 300
+    "Пряме налаштування" // 327
   },
 
   { "Italiano", // Italian
@@ -4245,7 +4258,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST su tempo NTP", // 297
     "Imposta offset orario NTP", // 298
     "Il registro contiene più di 130 voci, che il visualizzatore non può elaborare. Scarica il file CSV per elaborarlo.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Sintonia diretta" // 327
   },
 
   { "Simplified Chinese", // Simplified Chinese
@@ -4548,7 +4562,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "联网自动同步本机时间", // 297
     "设置NTP时区", // 298
     "该日志包含超过130个条目，观看者无法处理。请下载CSV文件进行处理。", // 299
-    "加拿大" // 300
+    "加拿大", // 300
+    "直接调谐" // 327
   },
 
   { "Norsk", // Norwegian
@@ -4851,7 +4866,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto sommertid med NTP", // 297
     "Angi NTP-tidsforskyvning", // 298
     "Loggbok har over 130 oppføringer.\nLast ned CSV for behandling.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Direkte innstilling" // 327
   },
 
   { "Español", // Spanish
@@ -5154,7 +5170,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "DST automático (NTP)", // 297
     "Ajustar\ndesplazamiento NTP", // 298
     "El registro tiene +130 entradas.\nDescargue el CSV.", // 299
-    "Canadá" // 300
+    "Canadá", // 300
+    "Sintonización directa" // 327
   },
 
   { "Português", // Portuguese
@@ -5457,7 +5474,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "DST automático\nno horário NTP", // 297
     "Definir deslocamento\nde tempo NTP", // 298
     "O diário de bordo contém mais de 130 entradas que o espectador não consegue processar. Descarregue o ficheiro CSV para processá-lo.", // 299
-    "Canadá" // 300
+    "Canadá", // 300
+    "Sintonização direta" // 327
   },
 
   { "Srpski", // Serbian
@@ -5760,7 +5778,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST na\nNTP vremenu", // 297
     "Postavite NTP\nvremenski offset", // 298
     "Dnevnik sadrži više od 130 unosa, što viewer ne može obraditi. Preuzmite CSV fajl za obradu.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Директно подешавање" // 327
   },
 
   { "Suomi", // Finnish
@@ -6063,7 +6082,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST\nNTP-ajassa", // 297
     "Aseta\nNTP-aikasiirto", // 298
     "Lokikirja sisältää yli 130 merkintää, joita katselija ei pysty käsittelemään. Lataa CSV-tiedosto sen käsittelemiseksi.", // 299
-    "Kanada" // 300
+    "Kanada", // 300
+    "Suora viritys" // 327
   },
 
   { "Dansk", // Danish
@@ -6366,7 +6386,8 @@ static const char* const myLanguage[21][301] PROGMEM = {
     "Auto DST på\nNTP-tid", // 297
     "Indstil NTP-tidsforskel", // 298
     "Logbogen indeholder over 130 poster, som fremviseren ikke kan behandle. Download CSV-filen for at behandle den.", // 299
-    "Canada" // 300
+    "Canada", // 300
+    "Direkte indstilling" // 327
   }
 
 };

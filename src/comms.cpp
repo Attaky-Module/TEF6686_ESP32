@@ -222,7 +222,14 @@ void Communication() {
       }
     }
 
+#ifdef ATK_COMBO_V1
+    // Board profile: USB-C is a CH340X UART bridge shared with the boot log,
+    // and the RDS Spy / XDR-GTK USB protocols would hijack it. Compile the
+    // auto-detect away rather than letting boot chatter trip it.
+    if (false) {
+#else
     if (!RDSSPYUSB && !XDRGTKUSB && Serial.available()) {
+#endif
       String data_str = Serial.readStringUntil('\n');
       if (data_str.indexOf("?F") != -1 || data_str.indexOf("*F") != -1) {
         RDSSPYUSB = true;

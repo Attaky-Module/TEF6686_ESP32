@@ -28,6 +28,35 @@
 #include "src/touch.h"
 #include "src/logbook.h"
 
+#ifdef ATK_COMBO_V1
+#include "src/board_attaky.h"
+
+// Board profile: none of the upstream GPIO peripherals exist here. Keys are on
+// an AW9523 I2C expander, touch is an FT6636 polled over I2C, the backlight is
+// a LEDC channel on IO14, and there is no pot, no S-meter, no standby LED and
+// no battery divider. The pins below are therefore placeholders; every site
+// that would drive them is compiled out further down.
+//
+// The four button macros must NOT be -1. Upstream release-wait loops
+// (`while (digitalRead(X) == LOW) ...`) read GPIO input-register bit 31 when
+// given -1 on an ESP32-S3 — that is the live octal-PSRAM bus line, whose level
+// follows memory traffic, so such a loop can spin forever. Point them instead
+// at an unused pin held HIGH by its internal pull-up, and every wait loop falls
+// straight through to the short-press branch.
+#define ROTARY_PIN_A    ATK_DUMMY_HIGH_PIN
+#define ROTARY_PIN_B    ATK_DUMMY_HIGH_PIN
+#define ROTARY_BUTTON   ATK_DUMMY_HIGH_PIN
+#define BANDBUTTON      ATK_DUMMY_HIGH_PIN
+#define BWBUTTON        ATK_DUMMY_HIGH_PIN
+#define MODEBUTTON      ATK_DUMMY_HIGH_PIN
+#define EXT_IRQ         ATK_DUMMY_HIGH_PIN
+#define PIN_POT         -1
+#define BATTERY_PIN     -1
+#define CONTRASTPIN     -1
+#define STANDBYLED      -1
+#define SMETERPIN       -1
+#define TOUCHIRQ        -1
+#else
 #define ROTARY_PIN_A    34
 #define ROTARY_PIN_B    36
 #define ROTARY_BUTTON   39
@@ -41,8 +70,15 @@
 #define SMETERPIN       27
 #define TOUCHIRQ        33
 #define EXT_IRQ         14
+#endif
 
+#ifndef ATK_COMBO_V1
 #define DYNAMIC_SPI_SPEED   // uncomment to enable dynamic SPI Speed https://github.com/ohmytime/TFT_eSPI_DynamicSpeed
+#endif
+// Board profile: the vendored stock TFT_eSPI 2.5.43 has no setSPISpeed()
+// (that API belongs to the DynamicSpeed forks), so the dynamic-speed paths
+// stay compiled out and SPI runs fixed at SPI_FREQUENCY (27 MHz) — the same
+// base clock the delivered 2.20-A001 build used.
 //#define HAS_AIR_BAND        // uncomment to enable Air Band(Make sure you have Air Band extend board)
 
 #ifdef ARS
@@ -73,6 +109,11 @@ bool beepresetstop;
 bool BWreset;
 bool bwtouchtune;
 bool BWtune;
+bool freqkeypadtune;
+bool freqBandPicker;
+byte freqPickerCount;
+byte freqPickerBands[5];
+int freqPickerFreqs[5];
 bool change;
 bool clockampm;
 bool compressedold;
@@ -478,14 +519,18 @@ byte screensaver_IRQ = OFF;
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  // Upstream drive-strength tuning for classic-ESP32 pins. This is an
+  // ESP32-S3: GPIO 22/23 do not exist there, and calling into them logged
+  // "E gpio_set_drive_capability: GPIO number error" at every boot
+  // (HW-observed 2026-09-02, test A1 / BF-2). The remaining pins are S3-
+  // valid and were live (unchanged electrical state) throughout the 09-02
+  // full-function test run, so only the two invalid calls are removed.
   gpio_set_drive_capability((gpio_num_t) 5, GPIO_DRIVE_CAP_0);
   gpio_set_drive_capability((gpio_num_t) 16, GPIO_DRIVE_CAP_0);
   gpio_set_drive_capability((gpio_num_t) 17, GPIO_DRIVE_CAP_0);
   gpio_set_drive_capability((gpio_num_t) 18, GPIO_DRIVE_CAP_0);
   gpio_set_drive_capability((gpio_num_t) 19, GPIO_DRIVE_CAP_0);
   gpio_set_drive_capability((gpio_num_t) 21, GPIO_DRIVE_CAP_0);
-  gpio_set_drive_capability((gpio_num_t) 22, GPIO_DRIVE_CAP_0);
-  gpio_set_drive_capability((gpio_num_t) 23, GPIO_DRIVE_CAP_0);
 
   setupmode = true;
   EEPROM.begin(EE_TOTAL_CNT);
@@ -546,6 +591,11 @@ void setup() {
   audiomode = EEPROM.readByte(EE_BYTE_AUDIOMODE);
   touchrotating = EEPROM.readByte(EE_BYTE_TOUCH_ROTATING);
   hardwaremodel = EEPROM.readByte(EE_BYTE_HARDWARE_MODEL);
+#ifdef ATK_COMBO_V1
+  // Board profile: this product IS the touch portable; the EEPROM byte only
+  // exists because upstream shares one settings layout across models.
+  hardwaremodel = PORTABLE_TOUCH_ILI9341;
+#endif
   poweroptions = EEPROM.readByte(EE_BYTE_POWEROPTIONS);
   CurrentTheme = EEPROM.readByte(EE_BYTE_CURRENTTHEME);
   fmdefaultstepsize = EEPROM.readByte(EE_BYTE_FMDEFAULTSTEPSIZE);
@@ -691,8 +741,39 @@ void setup() {
 #endif
   }
 
+#ifdef ATK_COMBO_V1
+  // Board profile (colour issue, fixed 2026-09-01): this panel batch renders
+  // fully colour-inverted under INVOFF — the shipped build ran INVON
+  // (radio_v2.2_github DefaultSettings writes EE_BYTE_INVERTDISPLAY=1 and
+  // showed correct colours). Upstream's `invertDisplay(!invertdisplay)`
+  // therefore produces INVOFF/inverted here; follow the stored setting with
+  // DIRECT polarity instead (default 1 -> INVON -> correct). Session-1's
+  // "inverted under both polarities" report was a false negative: an INVON
+  // hook placed before this line was overridden by it.
+  tft.invertDisplay((bool)invertdisplay);
+#else
   tft.invertDisplay(!invertdisplay);
+#endif
 
+#ifdef ATK_COMBO_V1
+  // Clear the panel GRAM BEFORE the backlight comes up: ST7789 GRAM retains
+  // the pre-power-off frame, and backlight init used to happen ~170 setup
+  // lines before the first real paint (splash fillScreen), leaving the old
+  // UI visible for that whole window (HW-observed 2026-09-02, test A1 /
+  // BF-1). Residual: the ROM-bootloader window before tft.init() cannot be
+  // cleared from firmware.
+  tft.fillScreen(BackgroundColor);
+  // Board profile: bring up the main I2C bus (keys / touch / fuel gauge), the
+  // LEDC backlight on IO14, the AW9523 keypad and the FT6636 touch controller.
+  // There is no rotary encoder and no touch IRQ line, so neither interrupt is
+  // attached — keys and touch are both polled once per loop().
+  boardMainBusInit();
+  boardBacklightInit();
+  boardKeypadInit();
+  boardTouchInit();
+  // Hold the shared dummy button pin HIGH so upstream release-wait loops exit.
+  pinMode(ATK_DUMMY_HIGH_PIN, INPUT_PULLUP);
+#else
   pinMode(BANDBUTTON, INPUT);
   pinMode(MODEBUTTON, INPUT);
   pinMode(BWBUTTON, INPUT);
@@ -707,6 +788,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(TOUCHIRQ), Touch_IRQ_Handler, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ROTARY_PIN_A), read_encoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ROTARY_PIN_B), read_encoder, CHANGE);
+#endif
 
   tft.setSwapBytes(true);
   tft.fillScreen(BackgroundColor);
@@ -742,6 +824,14 @@ void setup() {
 
   UpdateFonts(0);
 
+#ifndef ATK_COMBO_V1
+  // Board profile: upstream boot combos read the four GPIO buttons directly.
+  // On ATK_COMBO_V1 those macros alias one dummy pin, and the dummy pin's
+  // level follows whatever the stacked module does with its BTB line (IO21
+  // measured LOW with the FM-AM module stacked, 2026-09-01). A phantom LOW
+  // here can latch a combo — including the EEPROM-reset and invert-colors
+  // combos — and then hang in the release-wait loop. Spec D4 drops the
+  // boot combos; equivalent functions live in menus/touch.
   if (digitalRead(BWBUTTON) == LOW && digitalRead(ROTARY_BUTTON) == HIGH && digitalRead(MODEBUTTON) == HIGH && digitalRead(BANDBUTTON) == HIGH) {
     if (rotarymode == 0) rotarymode = 1; else rotarymode = 0;
     EEPROM.writeByte(EE_BYTE_ROTARYMODE, rotarymode);
@@ -827,11 +917,21 @@ void setup() {
     Infoboxprint(myLanguage[language][69]);
     tftPrint(0, myLanguage[language][2], 155, 130, ActiveColor, ActiveColorSmooth, 28);
     invertdisplay = !invertdisplay;
-    tft.invertDisplay(!invertdisplay);
+#ifdef ATK_COMBO_V1
+  // Board profile: this panel batch renders with full colour inversion when
+  // the display runs INVOFF (hardware quadrant test 2026-09-01: every fill
+  // colour came back bitwise-inverted - red as cyan, green as magenta, blue
+  // as yellow). It needs INVON, i.e. the opposite of upstream's default
+  // invertdisplay=1 -> invertDisplay(false) chain.
+  tft.invertDisplay(true);
+#else
+  tft.invertDisplay(!invertdisplay);
+#endif
     while (digitalRead(BWBUTTON) == LOW && digitalRead(BANDBUTTON) == LOW) delay(50);
     EEPROM.writeByte(EE_BYTE_INVERTDISPLAY, invertdisplay);
     EEPROM.commit();
   }
+#endif  // ATK_COMBO_V1 boot combos
 
   tft.setTouch(TouchCalData);
 
@@ -846,10 +946,17 @@ void setup() {
   tft.pushImage (78, 34, 163, 84, openradiologo);
   tft.drawBitmap(130, 124, TEFLogo, 59, 23, ActiveColor);
 
+#ifdef ATK_COMBO_V1
+  // Board profile: backlight is LEDC on IO14 (no CONTRASTPIN). Apply the
+  // persisted brightness here — upstream's analogWrite ramp is a no-op with
+  // the dummy pin, which left the panel at the init default after boot.
+  boardBacklightSet(ContrastSet);
+#else
   for (int x = 0; x <= ContrastSet; x++) {
     analogWrite(CONTRASTPIN, map(x, 0, 100, 15, 255));
     delay(30);
   }
+#endif
 
   tft.fillRect(120, 230, 16, 6, PrimaryColor);
 
@@ -895,6 +1002,7 @@ void setup() {
   }
   tftPrint(0, "Patch: v" + String(TEF), 160, 202, ActiveColor, ActiveColorSmooth, 28);
 
+#ifndef ATK_COMBO_V1
   Wire.beginTransmission(0x20);
   Wire.write(0x06);
   Wire.write(0xFF);
@@ -902,6 +1010,11 @@ void setup() {
   Wire.endTransmission();
 
   if (analogRead(BATTERY_PIN) < 200) batterydetect = false;
+#else
+  // Board profile: no PCF8574 expander at 0x20 and no battery divider —
+  // battery presence comes from the I2C fuel gauges (spec E11).
+  batterydetect = boardFuelGaugePresent();
+#endif
 
   if (wifi) {
     tryWiFi();
@@ -962,6 +1075,195 @@ void setup() {
   tottimer = millis();
 }
 
+#ifdef ATK_COMBO_V1
+// ---------------------------------------------------------------------------
+// Board profile input handling (spec D4, amended 2026-09-01): touch is the
+// primary interface; physical keys are UP/DOWN = volume (+ auto-repeat),
+// POWER short-press = screen on/off (spec E12 light standby) and SELECT =
+// main menu (the on-screen MENU entry kept colliding with dynamic top-bar
+// content). LEFT / RIGHT / L1 / R1 have no firmware role. Tuning stays
+// touch-first (keypad / seek / preset store).
+// ---------------------------------------------------------------------------
+
+// Volume OSD, drawn bottom-centre over the PS/RT strip (user ruling
+// 2026-09-01: the top-bar strip now hosts the MENU pill). Erased by a timer
+// in AtkPollKeys(); the erase hole in the PS/RT line self-heals on the next
+// RDS refresh.
+#define ATK_VOL_OSD_X        120
+#define ATK_VOL_OSD_Y        212
+#define ATK_VOL_OSD_W        80
+#define ATK_VOL_OSD_H        26
+#define ATK_VOL_OSD_HOLD_MS  1500
+
+// POWER short-press toggles the screen immediately; long-press is a hardware
+// power cut the firmware never sees.
+bool atkVolOsdShown = false;
+unsigned long atkVolOsdTimer = 0;
+bool atkVolDirty = false;
+unsigned long atkVolDirtyTimer = 0;
+
+void AtkVolumeOsdShow() {
+  if (screenmute || menu || BWtune || freqkeypadtune || freqBandPicker || afscreen || advancedRDS || scandxmode || screensavertriggered) return;
+  tft.fillRect(ATK_VOL_OSD_X, ATK_VOL_OSD_Y, ATK_VOL_OSD_W, ATK_VOL_OSD_H, BackgroundColor);
+  tftPrint(0, (VolSet > 0 ? "+" : "") + String(VolSet, DEC) + " dB", 160, ATK_VOL_OSD_Y + 6, ActiveColor, ActiveColorSmooth, 16);
+  atkVolOsdShown = true;
+  atkVolOsdTimer = millis();
+}
+
+void AtkVolumeOsdErase() {
+  if (!atkVolOsdShown) return;
+  tft.fillRect(ATK_VOL_OSD_X, ATK_VOL_OSD_Y, ATK_VOL_OSD_W, ATK_VOL_OSD_H, BackgroundColor);
+  atkVolOsdShown = false;
+}
+
+void AtkVolumeStep(int8_t dir) {
+  int8_t v = VolSet + dir;
+  if (v > 10) v = 10;
+  if (v < ATK_VOL_MIN_DB) v = ATK_VOL_MIN_DB;   // spec D8 floor
+  if (v == VolSet) return;
+  VolSet = v;
+  radio.setVolume(VolSet);
+  // Persist AFTER a 5 s settle window (loop), not per step: the EEPROM
+  // emulation rewrites the whole 2.3 KB blob per commit, so saving during
+  // the auto-repeat ramp would churn NVS exactly like the v2.20.10-line
+  // defect (session-10 lesson).
+  atkVolDirty = true;
+  atkVolDirtyTimer = millis();
+  AtkVolumeOsdShow();
+}
+
+// Touch entry into the main menu (top-right MENU pill). Mirrors the open
+// branch of ModeButtonPress(); lives here because the CHS font objects are
+// visible in this translation unit only.
+void AtkOpenMainMenu() {
+  menuoption = ITEM1;
+  menupage = INDEX;
+  menuitem = 0;
+  PSSprite.unloadFont();
+  if (language == LANGUAGE_CHS) PSSprite.loadFont(FONT16_CHS); else PSSprite.loadFont(FONT16);
+  BuildMenu();
+  freq_in = 0;
+  menu = true;
+  ScreensaverTimerSet(OFF);
+}
+
+void AtkPollKeys() {
+  // Volume change cadence: one step on the press edge, then after a 450 ms
+  // hold a repeat every 120 ms (auto-repeat ramp, spec D4).
+  static uint8_t heldMask = 0;
+  static unsigned long holdStart = 0;
+  static unsigned long lastRepeat = 0;
+  static bool prevPower = false;
+  static bool prevSelect = false;
+  static bool prevRight = false;
+  static bool prevL1 = false;
+  static bool prevR1 = false;
+  // A press that toggled the screen is swallowed until EVERY key is released
+  // — otherwise the still-held POWER key instantly re-triggers the wake
+  // branch on the next loop pass and the screen blinks back on (observed on
+  // HW 2026-09-01: "short press never turns the screen off").
+  static bool swallowUntilRelease = false;
+
+  uint8_t k = boardKeypadRead();
+  bool keyUp = !bitRead(k, ATK_KEY_UP);
+  bool keyDown = !bitRead(k, ATK_KEY_DOWN);
+  bool keySelect = !bitRead(k, ATK_KEY_SELECT);
+  bool keyPower = !bitRead(k, ATK_KEY_POWER);
+  bool keyLeft = !bitRead(k, ATK_KEY_LEFT);
+  bool keyRight = !bitRead(k, ATK_KEY_RIGHT);
+  bool keyL1 = !bitRead(k, ATK_KEY_L1);
+  bool keyR1 = !bitRead(k, ATK_KEY_R1);
+
+  bool anyKey = keyUp || keyDown || keySelect || keyPower || keyLeft || keyRight || keyL1 || keyR1;
+  if (anyKey) tottimer = millis();
+
+  // POWER short press toggles the screen (long-press is a hardware power cut
+  // the firmware never sees). Edge-triggered so a hold toggles once, and the
+  // toggle is swallowed until every key is released so the held key cannot
+  // instantly undo it (HW 2026-09-01).
+  if (keyPower && !prevPower && !swallowUntilRelease) {
+    if (screensavertriggered) WakeToSleep(REVERSE);
+    else WakeToSleep(true);
+    swallowUntilRelease = true;
+    heldMask = 0;
+  }
+  prevPower = keyPower;
+
+  if (swallowUntilRelease) {
+    if (!anyKey) swallowUntilRelease = false;
+    return;
+  }
+
+  // Any key wakes the screensaver; the waking press is swallowed.
+  if (screensavertriggered) {
+    if (anyKey) {
+      WakeToSleep(REVERSE);
+      swallowUntilRelease = true;
+      heldMask = 0;
+    }
+    return;
+  }
+
+  // SELECT toggles the main menu (user ruling 2026-09-01: menu entry via
+  // the physical key — the on-screen MENU entry kept colliding with dynamic
+  // top-bar content). On the radio screen it opens the menu; inside the
+  // menu (any depth) endMenu() commits settings and rebuilds the radio
+  // screen. During an FM DX scan the scan view has no exit affordance at
+  // all (top-bar MODE path only repaints), so SELECT cancels the scan via
+  // the canonical cancelDXScan() — the same exit the auto-cancel condition
+  // and the XDRGTK 'E' command use (user ruling 2026-09-02, BF-6). The
+  // menu stays blocked while scanning: SELECT there means "leave the
+  // mode", never "open a menu over the scan".
+  if (keySelect && !prevSelect && !BWtune && !freqkeypadtune && !freqBandPicker && !advancedRDS && !afscreen) {
+    if (scandxmode) {
+      cancelDXScan();
+      ShowFreq(0);
+    }
+    else if (menu) endMenu();
+    else AtkOpenMainMenu();
+  }
+  prevSelect = keySelect;
+
+  // L1 / R1 = seek down / up (auto search; user ruling 2026-09-02): the
+  // same Seek() primitive the XDRGTK '<' / '>' commands use — mode-
+  // independent, stops on a station. The GLOBAL `direction` must be set
+  // before Seek(): the seek continuation loop re-invokes Seek(direction)
+  // every pass, so a stale direction instantly reverts R1's upward step
+  // (HW-observed 2026-09-02 regression run). RIGHT restores the BAND key
+  // this board profile lacks (BF-4; user remap 2026-09-02) with upstream
+  // semantics intact: in MEM mode doBandToggle() starts the FM DX scan,
+  // which SELECT now exits (BF-6 fix). All three stay inert while a
+  // full-screen mode owns the view.
+  if (!menu && !BWtune && !freqkeypadtune && !freqBandPicker && !advancedRDS && !afscreen && !scandxmode) {
+    if (keyL1 && !prevL1) { direction = false; Seek(false); }
+    if (keyR1 && !prevR1) { direction = true;  Seek(true);  }
+    if (keyRight && !prevRight) doBandToggle();
+  }
+  prevL1 = keyL1;
+  prevR1 = keyR1;
+  prevRight = keyRight;
+
+  uint8_t mask = (keyUp ? 1 : 0) | (keyDown ? 2 : 0);
+  if (mask != heldMask) {
+    heldMask = mask;
+    holdStart = millis();
+    lastRepeat = 0;
+    if (mask) {
+      AtkVolumeStep(mask == 1 ? 1 : -1);
+      if (screensaverset && !BWtune && !menu) ScreensaverTimerRestart();
+    }
+  } else if (mask && millis() - holdStart > 450) {
+    if (millis() - lastRepeat > 120) {
+      lastRepeat = millis();
+      AtkVolumeStep(mask == 1 ? 1 : -1);
+      if (screensaverset && !BWtune && !menu) ScreensaverTimerRestart();
+    }
+  }
+
+  if (atkVolOsdShown && millis() >= atkVolOsdTimer + ATK_VOL_OSD_HOLD_MS) AtkVolumeOsdErase();
+}
+#endif
+
 void loop() {
   if (wifi && !menu) {
     webserver.handleClient();
@@ -977,6 +1279,39 @@ void loop() {
     }
   }
 
+#ifdef ATK_COMBO_V1
+  // Board profile: FT6636 capacitive touch on the main I2C bus, no IRQ line
+  // (TOUCHIRQ = -1). Poll the controller once per loop and feed the events
+  // through the same first-touch/repeat cadence upstream uses. A touch wakes
+  // the screensaver (swallowed, not acted on) and restarts its timer —
+  // upstream only restarts that timer from the physical-key paths.
+  {
+    uint16_t x, y;
+    if (boardTouchRead(&x, &y)) {
+      boardTouchMapToScreen(&x, &y);
+      if (x > 0 || y > 0) {
+        if (screensavertriggered) {
+          WakeToSleep(REVERSE);
+          // Swallow the waking finger: no doTouchEvent until it is released.
+          firstTouchHandled = true;
+        } else if (!firstTouchHandled) {
+          doTouchEvent(x, y);
+          firstTouchHandled = true;
+          lastTouchTime = millis();
+        } else if (touchrepeat) {
+          if (millis() - lastTouchTime >= 500) {
+            doTouchEvent(x, y);
+          }
+        }
+        tottimer = millis();
+        if (screensaverset && !BWtune && !menu && !screensavertriggered) ScreensaverTimerRestart();
+      }
+    } else {
+      firstTouchHandled = false;
+      touch_detect = false;
+    }
+  }
+#else
   if (hardwaremodel == PORTABLE_TOUCH_ILI9341 && touch_detect) {
     if (tft.getTouchRawZ() > 100) {  // Check if the touch is active
       uint16_t x, y;
@@ -1001,15 +1336,29 @@ void loop() {
       touch_detect = false;       // Reset the touch detection flag
     }
   }
+#endif
 
   Communication();
+
+#ifdef ATK_COMBO_V1
+  // Board profile: physical keys (volume / power / SELECT-menu) + main-bus
+  // error recovery.
+  AtkPollKeys();
+  boardMainBusWatchdog();
+  // Settled volume changes are persisted here (5 s after the last step).
+  if (atkVolDirty && millis() - atkVolDirtyTimer >= 5000) {
+    atkVolDirty = false;
+    EEPROM.writeByte(EE_BYTE_VOLSET, VolSet);
+    EEPROM.commit();
+  }
+#endif
 
   if (tot != 0) {
     unsigned long totprobe = tot * 60000;
     if (millis() >= tottimer + totprobe) deepSleep();
   }
 
-  if (freq_in != 0 && millis() >= keypadtimer + 2000) {
+  if (!freqkeypadtune && !freqBandPicker && freq_in != 0 && millis() >= keypadtimer + 2000) {
     freq_in = 0;
     ShowFreq(0);
   }
@@ -1105,7 +1454,7 @@ void loop() {
     }
   }
 
-  if (!BWtune && !menu && !afscreen && !scandxmode) {
+  if (!BWtune && !freqkeypadtune && !freqBandPicker && !menu && !afscreen && !scandxmode) {
     if (af != 0 && dropout && millis() >= aftimer + 1000) {
       aftimer = millis();
       if (radio.af_counter == 0) {
@@ -1223,7 +1572,7 @@ void loop() {
 
   if (seek) Seek(direction);
 
-  if ((SStatus / 10 > LowLevelSet) && !LowLevelInit && !BWtune && !menu && band < BAND_GAP) {
+  if ((SStatus / 10 > LowLevelSet) && !LowLevelInit && !BWtune && !freqkeypadtune && !freqBandPicker && !menu && band < BAND_GAP) {
     if (!screenmute && !advancedRDS && !afscreen) {
       if (showmodulation) {
         tftPrint(-1, "10", 24, 144, ActiveColor, ActiveColorSmooth, 16);
@@ -1255,7 +1604,7 @@ void loop() {
   }
 
   if ((SStatus / 10 <= LowLevelSet) && band < BAND_GAP) {
-    if (LowLevelInit && !BWtune && !menu) {
+    if (LowLevelInit && !BWtune && !freqkeypadtune && !freqBandPicker && !menu) {
       if (!screenmute && !afscreen && !advancedRDS) {
         for (byte segments = 0; segments < 94; segments++) {
           if (segments > 54) {
@@ -1288,7 +1637,7 @@ void loop() {
       LowLevelInit = false;
     }
 
-    if (!BWtune && !menu && (screenmute || radio.rds.correctPI != 0)) readRds();
+    if (!BWtune && !freqkeypadtune && !freqBandPicker && !menu && (screenmute || radio.rds.correctPI != 0)) readRds();
     if (millis() >= lowsignaltimer + 300) {
       lowsignaltimer = millis();
       if (af || (!screenmute || (screenmute && (XDRGTKTCP || XDRGTKUSB)))) {
@@ -1298,7 +1647,7 @@ void loop() {
           radio.getStatusAM(SStatus, USN, WAM, OStatus, BW, MStatus, CN);
         }
       }
-      if (!BWtune && !menu) {
+      if (!BWtune && !freqkeypadtune && !freqBandPicker && !menu) {
         doSquelch();
         GetData();
       }
@@ -1312,7 +1661,7 @@ void loop() {
         radio.getStatusAM(SStatus, USN, WAM, OStatus, BW, MStatus, CN);
       }
     }
-    if (!BWtune && !menu) {
+    if (!BWtune && !freqkeypadtune && !freqBandPicker && !menu) {
       doSquelch();
       if (millis() >= tuningtimer + 200) readRds();
       GetData();
@@ -1358,6 +1707,14 @@ void loop() {
     }
   }
 
+#ifndef ATK_COMBO_V1
+  // Board profile: upstream GPIO key polling. On ATK_COMBO_V1 all four button
+  // macros alias one dummy BTB pin whose level follows the stacked module
+  // (measured LOW with the FM-AM module stacked, 2026-09-01) — a phantom LOW
+  // here runs BANDBUTTONPress(), whose long-press STANDBY tier calls
+  // deepSleep() and bricks the board until power-cycle (observed on HW as a
+  // deterministic ~7.6 s black screen). Physical input is owned by
+  // AtkPollKeys() above; these sections are dead and gated out.
   if (digitalRead(BANDBUTTON) == LOW) {
     tottimer = millis();
     if (screensavertriggered) {
@@ -1410,12 +1767,16 @@ void loop() {
       }
     }
   }
+#endif  // ATK_COMBO_V1 loop GPIO keys
 
   if (screensaverset) {
     if (screensaver_IRQ)
     {
       screensaver_IRQ = OFF;
-      if (!screensavertriggered && !BWtune && !menu) {
+      // `seek` is gated too: an unattended seek can easily outlast a short
+      // screensaver setting and the screen must not blank mid-seek
+      // (HW-observed 2026-09-02 regression run).
+      if (!screensavertriggered && !seek && !BWtune && !freqkeypadtune && !freqBandPicker && !menu) {
         WakeToSleep(true);
       }
     }
@@ -1424,9 +1785,9 @@ void loop() {
 
 void GetData() {
   if (!afscreen) ShowSignalLevel();
-  if (!BWtune && !menu) showPS();
+  if (!BWtune && !freqkeypadtune && !freqBandPicker && !menu) showPS();
 
-  if (band < BAND_GAP && !BWtune && !menu) {
+  if (band < BAND_GAP && !BWtune && !freqkeypadtune && !freqBandPicker && !menu) {
     if (advancedRDS && !afscreen && !screenmute) ShowAdvancedRDS();
     if (afscreen && !screenmute) ShowAFEON();
     if (!afscreen) {
@@ -1459,6 +1820,19 @@ void WakeToSleep(bool yes) {
         MuteScreen(1);
         StoreFrequency();
         break;
+#ifdef ATK_COMBO_V1
+      // Board profile: same proportional dimming, via the LEDC backlight
+      // (analogWrite re-setup hangs this board mid-redraw).
+      case LCD_BRIGHTNESS_1_PERCENT:
+        boardBacklightSet(ContrastSet / 100);
+        break;
+      case LCD_BRIGHTNESS_A_QUARTER:
+        boardBacklightSet(ContrastSet / 4);
+        break;
+      case LCD_BRIGHTNESS_HALF:
+        boardBacklightSet(ContrastSet / 2);
+        break;
+#else
       case LCD_BRIGHTNESS_1_PERCENT:
         analogWrite(CONTRASTPIN, map(ContrastSet / 100, 0, 100, 15, 255));
         break;
@@ -1468,6 +1842,7 @@ void WakeToSleep(bool yes) {
       case LCD_BRIGHTNESS_HALF:
         analogWrite(CONTRASTPIN, map(ContrastSet / 2, 0, 100, 15, 255));
         break;
+#endif
     }
   } else {
     switch (poweroptions) {
@@ -1486,7 +1861,11 @@ void WakeToSleep(bool yes) {
         ScreensaverTimerReopen();
         break;
     }
+#ifdef ATK_COMBO_V1
+    boardBacklightSet(ContrastSet);
+#else
     analogWrite(CONTRASTPIN, map(ContrastSet, 0, 100, 15, 255));
+#endif
   }
 }
 
@@ -3553,10 +3932,10 @@ void ShowOffset() {
 }
 
 void ShowBW() {
-  if (!BWtune && millis() >= bwupdatetimer + TIMER_BW_TIMER) {
+  if (!BWtune && !freqkeypadtune && !freqBandPicker && millis() >= bwupdatetimer + TIMER_BW_TIMER) {
     bwupdatetimer = millis();
   } else {
-    if (!BWtune) return;
+    if (!BWtune && !freqkeypadtune && !freqBandPicker) return;
   }
 
   if (BW != BWOld || BWreset) {
@@ -3658,7 +4037,12 @@ void showAutoSquelch(bool mode) {
 }
 
 void doSquelch() {
+  // Board profile: no squelch pot (PIN_POT = -1); reading it would return 0
+  // and force Squelch fully closed every pass, overriding the touch-set
+  // value. The menu/touch squelch value stands on its own.
+#ifndef ATK_COMBO_V1
   if (!XDRGTKUSB && !XDRGTKTCP && usesquelch && !autosquelch) Squelch = map(analogRead(PIN_POT), 0, 4095, -100, 920);
+#endif
   if (Squelch < - 800) Squelch = -100;
   if (Squelch > 900) Squelch = 920;
 
@@ -3708,7 +4092,7 @@ void doSquelch() {
 
     if (!XDRGTKUSB && !XDRGTKTCP && usesquelch && (!scandxmode || (scandxmode && !scanmute))) {
       if (!screenmute && usesquelch && !advancedRDS && !afscreen) {
-        if (!BWtune && !menu && (Squelch > Squelchold + 2 || Squelch < Squelchold - 2)) {
+        if (!BWtune && !freqkeypadtune && !freqBandPicker && !menu && (Squelch > Squelchold + 2 || Squelch < Squelchold - 2)) {
           SquelchSprite.setTextColor(PrimaryColor, PrimaryColorSmooth, false);
           SquelchSprite.fillSprite(BackgroundColor);
           if (Squelch == -100) {
@@ -3811,13 +4195,13 @@ void doSquelch() {
 
 void updateBW() {//todo air
   if (BWset == 0) {
-    if (!BWtune && !screenmute && !advancedRDS && !afscreen) {
+    if (!BWtune && !freqkeypadtune && !freqBandPicker && !screenmute && !advancedRDS && !afscreen) {
       tft.fillRoundRect(248, 36, 69, 18, 2, SecondaryColor);
       tftPrint(0, "AUTO BW", 282, 38, BackgroundColor, SecondaryColor, 16);
     }
     radio.setFMABandw();
   } else {
-    if (!BWtune && !screenmute && !advancedRDS && !afscreen) {
+    if (!BWtune && !freqkeypadtune && !freqBandPicker && !screenmute && !advancedRDS && !afscreen) {
       tft.fillRoundRect(248, 36, 69, 18, 2, GreyoutColor);
       tftPrint(0, "AUTO BW", 282, 38, BackgroundColor, GreyoutColor, 16);
     }
@@ -3827,13 +4211,13 @@ void updateBW() {//todo air
 void updateiMS() {
   if (band < BAND_GAP) {
     if (iMSset == 0) {
-      if (!screenmute && !advancedRDS && !afscreen && !BWtune) {
+      if (!screenmute && !advancedRDS && !afscreen && !BWtune && !freqkeypadtune && !freqBandPicker) {
         tft.fillRoundRect(249, 57, 30, 18, 2, SecondaryColor);
         tftPrint(0, "iMS", 265, 59, BackgroundColor, SecondaryColor, 16);
       }
       radio.setiMS(1);
     } else {
-      if (!screenmute && !advancedRDS && !afscreen && !BWtune) {
+      if (!screenmute && !advancedRDS && !afscreen && !BWtune && !freqkeypadtune && !freqBandPicker) {
         tft.fillRoundRect(249, 57, 30, 18, 2, GreyoutColor);
         tftPrint(0, "iMS", 265, 59, BackgroundColor, GreyoutColor, 16);
       }
@@ -3845,13 +4229,13 @@ void updateiMS() {
 void updateEQ() {
   if (band < BAND_GAP) {
     if (EQset == 0) {
-      if (!screenmute && !advancedRDS && !afscreen && !BWtune) {
+      if (!screenmute && !advancedRDS && !afscreen && !BWtune && !freqkeypadtune && !freqBandPicker) {
         tft.fillRoundRect(287, 57, 30, 18, 2, SecondaryColor);
         tftPrint(0, "EQ", 301, 59, BackgroundColor, SecondaryColor, 16);
       }
       radio.setEQ(1);
     } else {
-      if (!screenmute && !advancedRDS && !afscreen && !BWtune) {
+      if (!screenmute && !advancedRDS && !afscreen && !BWtune && !freqkeypadtune && !freqBandPicker) {
         tft.fillRoundRect(287, 57, 30, 18, 2, GreyoutColor);
         tftPrint(0, "EQ", 301, 59, BackgroundColor, GreyoutColor, 16);
       }
@@ -4131,10 +4515,17 @@ void ShowBattery() {
     return;
   }
 
-  uint16_t v = 0;
-  v = analogRead(BATTERY_PIN);
+#ifdef ATK_COMBO_V1
+  // Board profile (spec E11): no ADC divider — the pack voltage comes from
+  // the I2C fuel gauge (INA219 first, MAX17048 fallback) in millivolts.
+  uint16_t mv = boardBatteryMilliVolts();
+  battery = map(constrain(mv, ATK_BAT_EMPTY_MV, ATK_BAT_FULL_MV), ATK_BAT_EMPTY_MV, ATK_BAT_FULL_MV, 0, BAT_LEVEL_STAGE);
+  byte batteryprobe = map(constrain(mv, ATK_BAT_EMPTY_MV, ATK_BAT_FULL_MV), ATK_BAT_EMPTY_MV, ATK_BAT_FULL_MV, 0, 20);
+#else
+  uint16_t v = analogRead(BATTERY_PIN);
   battery = map(constrain(v, BAT_LEVEL_EMPTY, BAT_LEVEL_FULL), BAT_LEVEL_EMPTY, BAT_LEVEL_FULL, 0, BAT_LEVEL_STAGE);
   byte batteryprobe = map(constrain(v, BAT_LEVEL_EMPTY, BAT_LEVEL_FULL), BAT_LEVEL_EMPTY, BAT_LEVEL_FULL, 0, 20);
+#endif
 
   if (batteryold != batteryprobe) {
     if (batterydetect) {
@@ -4157,7 +4548,11 @@ void ShowBattery() {
 
 
     if (batterydetect) {
+#ifdef ATK_COMBO_V1
+      float batteryV = mv / 1000.0;
+#else
       float batteryV = constrain((((float)v / 4095.0) * 3.3 * (1100 / 1000.0) * 2.0), 0.0, 5.0);
+#endif
       float vPer = constrain((batteryV - BATTERY_LOW_VALUE) / (BATTERY_FULL_VALUE - BATTERY_LOW_VALUE), 0.0, 0.99) * 100;
 
       if (abs(batteryV - batteryVold) > 0.05 && batteryoptions == BATTERY_VALUE) {
@@ -4539,7 +4934,11 @@ void MuteScreen(bool setting) {
     setupmode = true;
     leave = true;
     tft.writecommand(0x11);
+#ifdef ATK_COMBO_V1
+    boardBacklightWake(ContrastSet);
+#else
     analogWrite(CONTRASTPIN, map(ContrastSet, 0, 100, 15, 255));
+#endif
     if (band < BAND_GAP) {
       if (afscreen) {
         BuildAFScreen();
@@ -4560,7 +4959,11 @@ void MuteScreen(bool setting) {
     setupmode = false;
   } else if (setting && !screenmute) {
     screenmute = true;
+#ifdef ATK_COMBO_V1
+    boardBacklightSleep();
+#else
     analogWrite(CONTRASTPIN, 0);
+#endif
     tft.writecommand(0x10);
   }
 }
@@ -4622,6 +5025,13 @@ void DefaultSettings() {
   EEPROM.writeByte(EE_BYTE_CURRENTTHEME, 0);
   EEPROM.writeByte(EE_BYTE_FMDEFAULTSTEPSIZE, 1);
   EEPROM.writeByte(EE_BYTE_SCREENSAVERSET, 0);
+#ifdef ATK_COMBO_V1
+  // Board profile defaults (spec E12): screensaver on at 30 s
+  // (screensaverOptions = {0, 3, 10, 30, 60}) and light standby = LCD fully
+  // off (audio keeps playing) instead of upstream's 1 % dim.
+  EEPROM.writeByte(EE_BYTE_POWEROPTIONS, LCD_OFF);
+  EEPROM.writeByte(EE_BYTE_SCREENSAVERSET, 3);
+#endif
   EEPROM.writeInt(EE_INT16_AMLEVELOFFSET, 0);
   EEPROM.writeByte(EE_BYTE_UNIT, 0);
   EEPROM.writeByte(EE_BYTE_AF, 0);
@@ -4784,6 +5194,16 @@ void tftPrint(int8_t offset, const String & text, int16_t x, int16_t y, int colo
 }
 
 void deepSleep() {
+#ifdef ATK_COMBO_V1
+  // Board profile (spec E12): no deep sleep on this hardware. The wake source
+  // upstream uses (ext0 on GPIO34) is not a legal ESP32-S3 RTC pin, and every
+  // key sits on the AW9523 over I2C — dead in deep sleep, so a deep-slept
+  // board only recovers by power-cycling. Callers (the TOT timer and the
+  // BAND long-press STANDBY branch) land in light standby instead: screen
+  // off, radio keeps playing, any touch/key wakes.
+  MuteScreen(1);
+  StoreFrequency();
+#else
   analogWrite(SMETERPIN, 0);
   pinMode (STANDBYLED, OUTPUT);
   digitalWrite(STANDBYLED, LOW);
@@ -4792,6 +5212,7 @@ void deepSleep() {
   radio.power(1);
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_34, LOW);
   esp_deep_sleep_start();
+#endif
 }
 
 void UpdateFonts(byte mode) {
@@ -4954,6 +5375,12 @@ void endMenu() {
   PSSprite.setTextDatum(TL_DATUM);
   BuildDisplay();
   SelectBand();
+  // Re-arm the screensaver: opening the menu stopped the HW timer
+  // (AtkOpenMainMenu -> ScreensaverTimerSet(OFF)) and timerRestart alone
+  // cannot revive a stopped alarm, so the screensaver stayed dead until
+  // reboot (HW-observed 2026-09-02, test B7/H1). Reopen() is the
+  // existing full re-arm (stop + load current setting + restart).
+  if (screensaverset) ScreensaverTimerReopen();
 }
 
 void startFMDXScan() {
@@ -5333,7 +5760,7 @@ int GetNum(void) {
   return -1;
 }
 
-void ShowNum(int val) {
+void ShowNum(int val, int color, int colorSmooth) {
   switch (freqfont) {
     case 0: FrequencySprite.loadFont(FREQFONT0); break;
     case 1: FrequencySprite.loadFont(FREQFONT1); break;
@@ -5346,65 +5773,121 @@ void ShowNum(int val) {
   FrequencySprite.setTextDatum(TR_DATUM);
 
   FrequencySprite.fillSprite(BackgroundColor);
-  FrequencySprite.setTextColor(SecondaryColor, SecondaryColorSmooth, false);
+  FrequencySprite.setTextColor((color == -1 ? SecondaryColor : color), (colorSmooth == -1 ? SecondaryColorSmooth : colorSmooth), false);
   FrequencySprite.drawString(String(val) + " ", 218, -6);
   FrequencySprite.pushSprite(46, 46);
 
   FrequencySprite.unloadFont();
 }
 
-void TuneFreq(int temp) {
-  aftest = true;
-  aftimer = millis();
+byte FindBandMatches(int temp, byte* outBands, int* outFreqs) {
+  byte candidates[5] = { BAND_FM, BAND_OIRT, BAND_LW, BAND_MW, BAND_SW };
+  byte count = 0;
 
-  if (band == BAND_FM) {
-    while (temp < (LowEdgeSet * 10)) temp = temp * 10;
-    if (temp > (HighEdgeSet * 10)) {
-      if (edgebeep) EdgeBeeper();
-    } else {
-      frequency = temp;
+  for (byte i = 0; i < 5; i++) {
+    byte b = candidates[i];
+    int t = temp;
+    unsigned int lo, hi;
+    switch (b) {
+      case BAND_FM:   lo = LowEdgeSet * 10;  hi = HighEdgeSet * 10;  break;
+      case BAND_OIRT: lo = LowEdgeOIRTSet * 10; hi = HighEdgeOIRTSet; break;
+      case BAND_LW:   lo = LWLowEdgeSet;     hi = LWHighEdgeSet;     break;
+      case BAND_MW:   lo = MWLowEdgeSet;     hi = MWHighEdgeSet;     break;
+      default:        lo = SWLowEdgeSet;     hi = SWHighEdgeSet;     break;
     }
-    radio.SetFreq(frequency);
-  } else if (band == BAND_OIRT) {
-    while (temp < (LowEdgeOIRTSet * 10)) temp = temp * 10;
-    if (temp > HighEdgeOIRTSet) {
-      if (edgebeep) EdgeBeeper();
-    } else {
-      frequency_OIRT = temp;
+    while (t < (int)lo) t = t * 10;
+    if (t <= (int)hi) {
+      outBands[count] = b;
+      outFreqs[count] = t;
+      count++;
     }
-    radio.SetFreq(frequency_OIRT);
-  } else if (band == BAND_LW) {
-    while (temp < LWLowEdgeSet) temp = temp * 10;
-    if (temp > LWHighEdgeSet) {
-      if (edgebeep) EdgeBeeper();
-    } else {
-      frequency_AM = temp;
-    }
-    radio.SetFreqAM(frequency_AM);
-    frequency_LW = frequency_AM;
-  } else if (band == BAND_MW) {
-    while (temp < MWLowEdgeSet) temp = temp * 10;
-    if (temp > MWHighEdgeSet) {
-      if (edgebeep) EdgeBeeper();
-    } else {
-      frequency_AM = temp;
-    }
-    radio.SetFreqAM(frequency_AM);
-    frequency_MW = frequency_AM;
-  } else if (band == BAND_SW) {
-    while (temp < SWLowEdgeSet) temp = temp * 10;
-    if (temp > SWHighEdgeSet) {
-      if (edgebeep) EdgeBeeper();
-    } else {
-      frequency_AM = temp;
-    }
-    radio.SetFreqAM(frequency_AM);
-    frequency_SW = frequency_AM;
+  }
+  return count;
+}
+
+void ApplyBandMatch(byte b, int freq) {
+  if (band != b) {
+    band = b;
+    SelectBand();
+  }
+  switch (b) {
+    case BAND_FM:
+      frequency = freq;
+      radio.SetFreq(frequency);
+      break;
+    case BAND_OIRT:
+      frequency_OIRT = freq;
+      radio.SetFreq(frequency_OIRT);
+      break;
+    case BAND_LW:
+      frequency_AM = freq;
+      frequency_LW = freq;
+      radio.SetFreqAM(frequency_AM);
+      break;
+    case BAND_MW:
+      frequency_AM = freq;
+      frequency_MW = freq;
+      radio.SetFreqAM(frequency_AM);
+      break;
+    case BAND_SW:
+      frequency_AM = freq;
+      frequency_SW = freq;
+      radio.SetFreqAM(frequency_AM);
+      break;
   }
 
   radio.clearRDS(fullsearchrds);
   if (RDSSPYUSB) Serial.print("G:\r\nRESET-------\r\n\r\n");
   if (RDSSPYTCP) RemoteClient.print("G:\r\nRESET-------\r\n\r\n");
+}
+
+// Returns 0 = rejected, 1 = applied, 2 = ambiguous (band picker popup opened).
+// Ported from upstream b02d3f1 ("Added direct touchscreen tuning"), with the
+// OIRT low-edge scaling kept identical to this line's TuneFreq semantics.
+int TuneFreq(int temp) {
+  aftest = true;
+  aftimer = millis();
+
+  byte matchBands[5];
+  int matchFreqs[5];
+  byte count = FindBandMatches(temp, matchBands, matchFreqs);
+
+  if (count == 0) {
+    if (edgebeep) EdgeBeeper();
+    radio.clearRDS(fullsearchrds);
+    if (RDSSPYUSB) Serial.print("G:\r\nRESET-------\r\n\r\n");
+    if (RDSSPYTCP) RemoteClient.print("G:\r\nRESET-------\r\n\r\n");
+    return 0;
+  }
+
+  if (count == 1) {
+    ApplyBandMatch(matchBands[0], matchFreqs[0]);
+    return 1;
+  }
+
+  freqPickerCount = count;
+  for (byte i = 0; i < count; i++) {
+    freqPickerBands[i] = matchBands[i];
+    freqPickerFreqs[i] = matchFreqs[i];
+  }
+  freqBandPicker = true;
+  BuildFreqBandPicker();
+  return 2;
+}
+
+void FreqKeypadConfirm() {
+  if (freq_in == 0) return;
+  int result = TuneFreq(freq_in);
+  if (result == 1) {
+    freqkeypadtune = false;
+    freq_in = 0;
+    BuildDisplay();
+    SelectBand();
+  } else if (result == 0) {
+    ShowNum(freq_in, SignificantColor, SignificantColorSmooth);
+  } else {
+    freq_in = 0;
+  }
 }
 
 void NumpadProcess(int num) {
@@ -5430,15 +5913,19 @@ void NumpadProcess(int num) {
       ScreensaverTimerSet(OFF);
     } else if (num == 13) {
       if (freq_in != 0) {
-        TuneFreq(freq_in);
-        if (XDRGTKUSB || XDRGTKTCP) {
-          if (band == BAND_FM) DataPrint("M0\nT" + String(frequency * 10) + "\n"); else if (band == BAND_OIRT) DataPrint("M0\nT" + String(frequency_OIRT * 10) + "\n"); else DataPrint("M1\nT" + String(frequency_AM) + "\n");
-        }
-        if (!memorystore) {
-          if (!memtune) radio.clearRDS(fullsearchrds);
-          memtune = false;
-          ShowFreq(0);
-          store = true;
+        int numpadresult = TuneFreq(freq_in);
+        if (numpadresult == 1) {
+          if (XDRGTKUSB || XDRGTKTCP) {
+            if (band == BAND_FM) DataPrint("M0\nT" + String(frequency * 10) + "\n"); else if (band == BAND_OIRT) DataPrint("M0\nT" + String(frequency_OIRT * 10) + "\n"); else DataPrint("M1\nT" + String(frequency_AM) + "\n");
+          }
+          if (!memorystore) {
+            if (!memtune) radio.clearRDS(fullsearchrds);
+            memtune = false;
+            ShowFreq(0);
+            store = true;
+          }
+        } else if (numpadresult == 0) {
+          ShowNum(freq_in);
         }
       } else {
         ShowFreq(0);

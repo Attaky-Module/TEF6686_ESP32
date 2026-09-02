@@ -1,1 +1,3 @@
-buy_me_a_coffee: pe5pb
+# This repository is an Attaky port of PE5PVB/TEF6686_ESP32.
+# Support goes to the upstream project.
+custom: ["https://github.com/PE5PVB/TEF6686_ESP32"]

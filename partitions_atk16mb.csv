@@ -1,0 +1,12 @@
+# Attaky ATK_COMBO_V1 16 MB re-cut (re-port spec E13): app enlarged,
+# SPIFFS (logbook.csv + WiFi credentials) and coredump preserved from the
+# upstream 4 MB layout. EEPROM emulation (~2.3 KB) rides the nvs partition.
+# nvs enlarged 16 KB -> 32 KB (2026-08-27): every EEPROM commit writes the
+# FULL 2305-byte blob (~76 entries); on 16 KB (4 pages) the churn deadlocks
+# NVS (no free page, blob index lost mid-GC) and the board boot-loops with
+# TEF=0. 32 KB holds ~10 live versions + multi-page GC headroom.
+# Name      ,Type ,SubType  ,Offset   ,Size
+nvs         ,data ,nvs      ,0x9000   ,0x8000
+coredump    ,data ,coredump ,0x11000  ,0xF000
+factory     ,app  ,factory  ,0x20000  ,0x7B0000
+spiffs      ,data ,spiffs   ,0x7D0000 ,0x30000

@@ -2,6 +2,14 @@
 #include "Tuner_Patch_Lithio_V102_p224.h"
 #include "Tuner_Patch_Lithio_V205_p512.h"
 #include <Wire.h>
+#ifdef ATK_COMBO_V1
+#include "board_attaky.h"
+// Board profile: the tuner rides a dedicated bus (Wire1, IO41/42 @ 100 kHz)
+// separate from the main keys/touch bus. Upstream code addresses the tuner as
+// "Wire"; alias it inside this translation unit so all tuner I/O lands on
+// Wire1 while the upstream function bodies stay untouched.
+#define Wire Wire1
+#endif
 
 bool Data_Accelerator = false;
 
@@ -174,8 +182,14 @@ void Tuner_Patch(byte TEF) {
 }
 
 void Tuner_I2C_Init() {
+#ifdef ATK_COMBO_V1
+  // Board profile: tuner sits on its own bus (Wire1, IO41/42 @ 100 kHz,
+  // FactoryTest-verified) separate from the main keys/touch bus.
+  boardTunerBusInit();
+#else
   Wire.begin();
   Wire.setClock(400000);
+#endif
   delay(5);
 }
 

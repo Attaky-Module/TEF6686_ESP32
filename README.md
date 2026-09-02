@@ -1,3 +1,89 @@
+<div align="center">
+
+  <a href="https://attaky.com">
+    <img alt="Attaky" src="./.github/attaky-logo-horizontal.png" width="32%" />
+  </a>
+
+  <h2>FM/AM Radio firmware for the Attaky Radio series</h2>
+
+  <p>
+    <img src="https://img.shields.io/badge/series-Attaky_Radio_Series-C0252B?style=flat-square" alt="Attaky Radio Series" />
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-GPL_3.0-blue?style=flat-square" alt="License" /></a>
+    <a href="https://discord.attaky.com"><img src="https://img.shields.io/badge/Discord-attaky-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
+  </p>
+
+  <a href="https://attaky.com">Attaky home</a>
+  &nbsp;·&nbsp;
+  <a href="https://discord.attaky.com">Discord</a>
+
+</div>
+
+> This repository is a fork of [TEF6686_ESP32](https://github.com/PE5PVB/TEF6686_ESP32) by PE5PVB,
+> ported by Attaky from upstream **v2.20** to run on the **Attaky Radio series**.
+> **Modified by Attaky in 2026** to add the `ATK_COMBO_V1` target, a touch-first tuning UI,
+> on-screen battery level, a screensaver and standby mode, and Attaky hardware bring-up fixes.
+> Inherits the project's **GPL-3.0** license.
+
+## Compatible devices
+
+Full-band FM and AM reception with a large touchscreen tuner. Runs on the **Attaky Radio series**:
+
+- **Attaky Core + FM/AM Radio module** — the receiver front end (NXP **TEF668x** tuner), with
+  speaker and 3.5 mm headphone output
+- **2.0-inch 320×240 touchscreen** — tune by frequency, step through the band, store favourite stations
+- *(optional)* **battery module** to go portable
+
+Reception features (FM/AM, RDS, memory channels, signal readouts, Wi-Fi extras) come from
+upstream TEF6686_ESP32.
+
+## What this fork adds on top of TEF6686_ESP32
+
+- **`ATK_COMBO_V1` build target** — a PlatformIO environment for the Core + FM/AM Radio module
+  hardware, kept in a self-contained board layer (`src/board_attaky.*`) so upstream files carry
+  only small documented hooks
+- **Touch-first tuning UI** — direct frequency keypad, band picker, seek and preset control from
+  the 320×240 capacitive touchscreen, plus an on-screen menu entry point
+- **Physical key mapping** for the Attaky keypad — volume, screen toggle, menu, seek and band
+- **On-screen battery level** — 4-segment icon with a voltage readout from the battery module
+- **Screensaver and light standby** — display blanks on an idle timer, audio keeps playing
+- **Bring-up fixes** for the Attaky hardware — split I²C buses for panel and tuner, backlight
+  and boot-frame handling, brightness applied at boot, settings persistence across cold boots
+
+Upstream reception, RDS, memory-channel and FM-DX features are unchanged.
+
+## Build & flash
+
+This is a PlatformIO project — clone **this** repository (not upstream `PE5PVB/TEF6686_ESP32`) to
+get the `ATK_COMBO_V1` target.
+
+1. Clone this fork:
+   ```sh
+   git clone https://github.com/Attaky-Module/TEF6686_ESP32.git
+   cd TEF6686_ESP32
+   ```
+2. Build the Attaky target (PlatformIO installs the toolchain and libraries on first run):
+   ```sh
+   pio run -e atk_combo_v1
+   ```
+3. Flash the build output. The partition layout is `partitions_atk16mb.csv`, so the application
+   sits at `0x20000`:
+   ```sh
+   pio run -e atk_combo_v1 -t upload --upload-port <port>
+   ```
+   A device coming from other firmware needs a full erase and the bootloader and partition table
+   written as well, before the application at `0x20000`.
+
+The upstream `[env:esp32]` environment still builds the unmodified upstream target.
+
+## Support
+
+- **Attaky Radio series / this fork** — Attaky [Discord](https://discord.attaky.com)
+- **TEF6686_ESP32 tuner software / upstream** — file at [`PE5PVB/TEF6686_ESP32`](https://github.com/PE5PVB/TEF6686_ESP32/issues)
+
+---
+
+# ↓ Upstream TEF6686_ESP32 README ↓
+
 [![contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](https://github.com/PE5PVB/TEF6686_ESP32#contributing)
 [![HitCount](https://hits.dwyl.com/PE5PVB/TEF6686_ESP32.svg?style=flat-square&show=unique)](http://hits.dwyl.com/PE5PVB/TEF6686_ESP32)
 [![License](https://img.shields.io/badge/license%20-%20GNU_GPLv3-GPLv3?color=blue)](https://github.com/PE5PVB/TEF6686_ESP32/blob/main/LICENSE)
